@@ -494,6 +494,36 @@ impl<'src> DecompressStarted<'src> {
         Some(image_dst)
     }
 
+    /// Supports any pixel type that is marked as "plain old data", see bytemuck crate.
+    /// `[u8; 3]` and `rgb::RGB8` are fine, for example.
+    /// Allocation-less version of `read_scanlines`
+    #[track_caller]
+    pub fn read_scanlines_into<T: rgb::Pod>(&mut self, dest: &mut [T]) -> usize {
+        let num_components = self.color_space().num_components();
+        assert_eq!(num_components, mem::size_of::<T>());
+        let width = self.width();
+        let height = self.height();
+        assert_eq!(height * width, dest.len());
+        let mut total_rows_read = 0;
+        unsafe {
+            while self.read_more_chunks() {
+                let start_line = self.dec.cinfo.output_scanline as usize;
+                let start_idx = width * start_line;
+                let rest: &mut [T] = &mut dest[start_idx..];
+                let rows = (&mut rest.as_mut_ptr()) as *mut *mut T;
+
+                let rows_read = ffi::jpeg_read_scanlines(&mut self.dec.cinfo, rows as *mut *mut u8, 1) as usize;
+                debug_assert_eq!(start_line + rows_read, self.dec.cinfo.output_scanline as usize, "wat {}/{} at {}", rows_read, height, start_line);
+
+                total_rows_read += rows_read;
+                if 0 == rows_read {
+                    return ret;
+                }
+            }
+        }
+        total_rows_read
+    }
+
     pub fn components(&self) -> &[CompInfo] {
         self.dec.components()
     }
